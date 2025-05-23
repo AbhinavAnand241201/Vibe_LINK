@@ -1,0 +1,17 @@
+# Documentation files (for assistant understanding only)
+appDetails.md
+architecture.md
+tasks.md
+
+# Node.js dependencies
+node_modules/
+
+# macOS system files
+.DS_Store
+
+# Xcode
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/
+DerivedData/
+build/
