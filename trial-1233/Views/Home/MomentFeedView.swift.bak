@@ -1,0 +1,740 @@
+import SwiftUI
+import CoreLocation
+
+struct MomentFeedView: View {
+    // MARK: - Properties
+    @StateObject private var viewModel = MomentViewModel()
+    @ObservedObject private var locationService = LocationService.shared
+    @State private var showingCreateMoment = false
+    @State private var selectedMoment: Moment? = nil
+    @State private var showingLocationAlert = false
+    @State private var animateCards = false
+    
+    // MARK: - Body
+    var body: some View {
+        NavigationView {
+            ZStack(alignment: .bottomTrailing) {
+                // Background gradient
+                LinearGradient(
+                    gradient: Gradient(colors: [Color(.systemBackground), Color(.systemGray6)]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+                
+                // Content
+                VStack(spacing: 0) {
+                    // Header
+                    headerView
+                    
+                    // Content based on state
+                    if viewModel.isLoading && viewModel.moments.isEmpty {
+                        loadingView
+                    } else if let error = viewModel.error {
+                        errorView(error)
+                    } else if viewModel.moments.isEmpty {
+                        emptyStateView
+                    } else {
+                        momentsList
+                    }
+                }
+                
+                // Create moment button
+                createMomentButton
+            }
+            .navigationTitle("Moments")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarHidden(true)
+            .alert("Location Required", isPresented: $showingLocationAlert) {
+                Button("Settings", role: .none) {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Please enable location services to view nearby moments.")
+            }
+            .onAppear {
+                checkLocationAndLoadMoments()
+                withAnimation(.spring().delay(0.3)) {
+                    animateCards = true
+                }
+            }
+            .sheet(isPresented: $showingCreateMoment) {
+                MomentCreationView(isPresented: $showingCreateMoment)
+            }
+            .sheet(item: $selectedMoment) { moment in
+                MomentDetailView(moment: moment, onJoin: {
+                    joinMoment(moment)
+                })
+            }
+        }
+        }
+    }
+    
+    // MARK: - Header View
+    private var headerView: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Moments")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+                
+                Text("Discover what's happening nearby")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            Button(action: {
+                viewModel.loadNearbyMoments()
+            }) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.pink)
+                    .padding(10)
+                    .background(
+                        Circle()
+                            .fill(.ultraThinMaterial)
+                            .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 2)
+                    )
+            }
+        }
+        .padding(.horizontal)
+        .padding(.top, 50)
+    }
+    
+    // MARK: - Loading View
+    private var loadingView: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 50))
+                .foregroundColor(.pink)
+                .opacity(0.7)
+            
+            Text("Loading moments...")
+                .font(.headline)
+                .foregroundColor(.secondary)
+                .modifier(ShimmerEffect())
+            
+            ProgressView()
+                .scaleEffect(1.5)
+                .padding()
+            
+            Spacer()
+        }
+    }
+    
+    // MARK: - Error View
+    private func errorView(_ error: String) -> some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 50))
+                .foregroundColor(.orange)
+            
+            Text(error)
+                .font(.headline)
+                .foregroundColor(.red)
+                .multilineTextAlignment(.center)
+                .padding()
+            
+            Button(action: {
+                viewModel.loadNearbyMoments()
+            }) {
+                Text("Try Again")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 30)
+                    .padding(.vertical, 12)
+                    .background(
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [.pink, .purple]),
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                    )
+                    .shadow(color: .pink.opacity(0.3), radius: 5, x: 0, y: 3)
+            }
+            
+            Spacer()
+        }
+        .padding()
+    }
+    
+    // MARK: - Empty State View
+    private var emptyStateView: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 60))
+                .foregroundColor(.gray.opacity(0.7))
+            
+            Text("No moments nearby")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.primary)
+            
+            Text("Be the first to share what's happening around you!")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            
+            Button(action: {
+                showingCreateMoment = true
+            }) {
+                HStack {
+                    Image(systemName: "plus.circle.fill")
+                    Text("Create a Moment")
+                }
+                .font(.headline)
+                .foregroundColor(.white)
+                .padding(.horizontal, 30)
+                .padding(.vertical, 12)
+                .background(
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [.pink, .purple]),
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                )
+                .shadow(color: .pink.opacity(0.3), radius: 5, x: 0, y: 3)
+            }
+            
+            Spacer()
+        }
+        .padding()
+    }
+    
+    // MARK: - Moments List
+    private var momentsList: some View {
+        ScrollView {
+            LazyVStack(spacing: 16) {
+                ForEach(Array(viewModel.moments.enumerated()), id: \.element.id) { index, moment in
+                    EnhancedMomentCard(moment: moment) {
+                        joinMoment(moment)
+                    } onTap: {
+                        selectedMoment = moment
+                    }
+                    .offset(y: animateCards ? 0 : 100)
+                    .opacity(animateCards ? 1 : 0)
+                    .animation(Animation.spring().delay(Double(index) * 0.05), value: animateCards)
+                }
+            }
+            .padding()
+        }
+    }
+    
+    // MARK: - Create Moment Button
+    private var createMomentButton: some View {
+        Button(action: {
+            showingCreateMoment = true
+        }) {
+            Image(systemName: "plus")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundColor(.white)
+                .frame(width: 60, height: 60)
+                .background(
+                    LinearGradient(
+                        gradient: Gradient(colors: [.pink, .purple]),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(Circle())
+                .shadow(color: .pink.opacity(0.4), radius: 10, x: 0, y: 5)
+                .padding()
+        }
+        .buttonStyle(ScaleButtonStyle())
+    }
+    
+    // MARK: - Helper Methods
+    private func joinMoment(_ moment: Moment) {
+        // Call the viewModel to join the moment
+        viewModel.joinMoment(moment)
+    }
+    
+    private func checkLocationAndLoadMoments() {
+        // Request location permission if not determined
+        if locationService.authorizationStatus == .notDetermined {
+            locationService.requestLocationPermission()
+        }
+        
+        // Start updating location
+        locationService.startUpdatingLocation()
+        
+        // Check if location is available
+        if locationService.authorizationStatus == .denied || locationService.authorizationStatus == .restricted {
+            showingLocationAlert = true
+            return
+        }
+        
+        // Load moments if location is available, otherwise wait for location update
+        if locationService.currentLocation != nil {
+            viewModel.loadNearbyMoments()
+        } else {
+            // Wait for location to be available
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                if locationService.currentLocation != nil {
+                    viewModel.loadNearbyMoments()
+                } else if locationService.authorizationStatus == .authorizedWhenInUse || locationService.authorizationStatus == .authorizedAlways {
+                    // Location permission granted but location not available yet
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        viewModel.loadNearbyMoments()
+                    }
+                }
+    let moment: Moment
+    let onJoin: () -> Void
+    let onTap: () -> Void
+    
+    @State private var isExpanded = false
+    @State private var isAnimating = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // User info and timestamp
+            HStack {
+                UserAvatar(initial: String(moment.userId.email.prefix(1)))
+                
+                VStack(alignment: .leading) {
+                    Text(moment.userId.email)
+                        .font(.headline)
+                    
+                    HStack {
+                        Image(systemName: "clock")
+                            .font(.caption2)
+                        
+                        Text(timeAgo(from: moment.createdAt))
+                            .font(.caption)
+                    }
+                    .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                // Distance indicator with animation
+                HStack {
+                    Image(systemName: "location.fill")
+                        .font(.caption)
+                        .foregroundColor(.pink)
+                        .opacity(isAnimating ? 1 : 0.5)
+                        .scaleEffect(isAnimating ? 1.1 : 1)
+                        .animation(Animation.easeInOut(duration: 1.5).repeatForever(autoreverses: true), value: isAnimating)
+                    
+                    Text("~2.3 km")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .onAppear {
+                    isAnimating = true
+                }
+            }
+            .padding(.horizontal)
+            .padding(.top)
+            
+            // Media content with gradient overlay
+            ZStack(alignment: .bottomLeading) {
+                if let url = URL(string: moment.mediaURL) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .empty:
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.2))
+                                .aspectRatio(4/3, contentMode: .fit)
+                                .overlay(
+                                    ProgressView()
+                                )
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                        case .failure(_):
+                            Rectangle()
+                                .fill(Color.gray.opacity(0.2))
+                                .aspectRatio(4/3, contentMode: .fit)
+                                .overlay(
+                                    Image(systemName: "photo")
+                                        .font(.largeTitle)
+                                        .foregroundColor(.gray)
+                                )
+                        @unknown default:
+                            EmptyView()
+                        }
+                    }
+                } else {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.2))
+                        .aspectRatio(4/3, contentMode: .fit)
+                        .overlay(
+                            Image(systemName: "photo")
+                                .font(.system(size: 40))
+                                .foregroundColor(.gray)
+                        )
+                }
+                
+                // Gradient overlay at bottom
+                LinearGradient(
+                    gradient: Gradient(colors: [.clear, .black.opacity(0.5)]),
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+                .aspectRatio(4/3, contentMode: .fit)
+                
+                // Caption overlay
+                VStack(alignment: .leading) {
+                    Text(moment.caption)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding()
+                        .lineLimit(isExpanded ? nil : 2)
+                }
+            }
+            .onTapGesture {
+                withAnimation(.spring()) {
+                    isExpanded.toggle()
+                }
+                onTap()
+            }
+            
+            // Action buttons
+            HStack(spacing: 20) {
+                Button(action: onJoin) {
+                    HStack {
+                        Image(systemName: "person.crop.circle.badge.plus")
+                        Text("Join")
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 16)
+                    .background(Color.pink)
+                    .cornerRadius(20)
+                }
+                
+                Button(action: onTap) {
+                    HStack {
+                        Image(systemName: "message")
+                        Text("Message")
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.pink)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal, 16)
+                    .background(Color.pink.opacity(0.1))
+                    .cornerRadius(20)
+                }
+                
+                Spacer()
+                
+                // Expiration indicator
+                HStack(spacing: 4) {
+                    Image(systemName: "clock")
+                        .font(.caption)
+                    
+                    Text(expiresIn(from: moment.expiresAt))
+                        .font(.caption)
+                }
+                .foregroundColor(.secondary)
+            }
+            .padding()
+        }
+        .background(Color.white)
+        .cornerRadius(20)
+        .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 5)
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+    }
+    
+    // Format relative time for created at
+    private func timeAgo(from date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+    
+    // Format expiration time
+    private func expiresIn(from date: Date) -> String {
+        let now = Date()
+        let components = Calendar.current.dateComponents([.hour, .minute], from: now, to: date)
+        
+        if let hours = components.hour, let minutes = components.minute {
+            if hours > 0 {
+                return "Expires in \(hours)h \(minutes)m"
+            } else {
+                return "Expires in \(minutes)m"
+            }
+        }
+        
+        return "Expiring soon"
+    }
+}
+
+// MARK: - Moment Detail View
+struct MomentDetailView: View {
+    let moment: Moment
+    let onJoin: () -> Void
+    
+    @Environment(\.presentationMode) var presentationMode
+    @State private var message = ""
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Media
+                    if let url = URL(string: moment.mediaURL) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .empty:
+                                Rectangle()
+                                    .fill(Color.gray.opacity(0.2))
+                                    .aspectRatio(4/3, contentMode: .fill)
+                                    .frame(height: 300)
+                                    .overlay(
+                                        ProgressView()
+                                    )
+                                    .clipped()
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(height: 300)
+                                    .clipped()
+                            case .failure(_):
+                                Rectangle()
+                                    .fill(Color.gray.opacity(0.2))
+                                    .aspectRatio(4/3, contentMode: .fill)
+                                    .frame(height: 300)
+                                    .overlay(
+                                        Image(systemName: "photo")
+                                            .font(.largeTitle)
+                                            .foregroundColor(.gray)
+                                    )
+                                    .clipped()
+                            @unknown default:
+                                EmptyView()
+                            }
+                        }
+                    } else {
+                        Rectangle()
+                            .fill(Color.gray.opacity(0.2))
+                            .aspectRatio(4/3, contentMode: .fill)
+                            .frame(height: 300)
+                            .overlay(
+                                Image(systemName: "photo")
+                                    .font(.largeTitle)
+                                    .foregroundColor(.gray)
+                            )
+                            .clipped()
+                    }
+                    
+                    // User info
+                    HStack(spacing: 15) {
+                        UserAvatar(initial: String(moment.userId.email.prefix(1)), size: 50)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(moment.userId.email)
+                                .font(.headline)
+                            
+                            Text(formatDate(moment.createdAt))
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        // Distance and expiration
+                        VStack(alignment: .trailing, spacing: 4) {
+                            HStack {
+                                Image(systemName: "location.fill")
+                                    .font(.caption)
+                                Text("~2.3 km away")
+                                    .font(.caption)
+                            }
+                            .foregroundColor(.secondary)
+                            
+                            HStack {
+                                Image(systemName: "clock")
+                                    .font(.caption)
+                                Text(expiresIn(from: moment.expiresAt))
+                                    .font(.caption)
+                            }
+                            .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.horizontal)
+                    
+                    // Caption
+                    Text(moment.caption)
+                        .font(.body)
+                        .padding(.horizontal)
+                    
+                    Divider()
+                        .padding(.vertical)
+                    
+                    // Message input
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Send a message")
+                            .font(.headline)
+                        
+                        HStack {
+                            TextField("Type your message...", text: $message)
+                                .padding()
+                                .background(Color(.systemGray6))
+                                .cornerRadius(10)
+                            
+                            Button(action: onJoin) {
+                                Image(systemName: "paperplane.fill")
+                                    .foregroundColor(.white)
+                                    .padding(12)
+                                    .background(Color.pink)
+                                    .clipShape(Circle())
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                    
+                    // Join button
+                    Button(action: onJoin) {
+                        Text("Join This Moment")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [.pink, .purple]),
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .cornerRadius(15)
+                            .shadow(color: .pink.opacity(0.3), radius: 5, x: 0, y: 3)
+                    }
+                    .padding(.horizontal)
+                    .padding(.top)
+                }
+                .padding(.bottom, 30)
+            }
+            .navigationTitle("Moment Details")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarItems(trailing: Button(action: {
+                presentationMode.wrappedValue.dismiss()
+            }) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.gray)
+                    .font(.title2)
+            })
+        }
+    }
+    
+    private func formatDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+    
+    private func expiresIn(from date: Date) -> String {
+        let now = Date()
+        let components = Calendar.current.dateComponents([.hour, .minute], from: now, to: date)
+        
+        if let hours = components.hour, let minutes = components.minute {
+            if hours > 0 {
+                return "Expires in \(hours)h \(minutes)m"
+            } else {
+                return "Expires in \(minutes)m"
+            }
+        }
+        
+        return "Expiring soon"
+    }
+}
+
+// MARK: - User Avatar
+struct UserAvatar: View {
+    var initial: String
+    var size: CGFloat = 40
+    var showBorder: Bool = true
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        gradient: Gradient(colors: [.pink, .purple]),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            
+            Text(initial.uppercased())
+                .font(.system(size: size * 0.4, weight: .bold))
+                .foregroundColor(.white)
+        }
+        .frame(width: size, height: size)
+        .overlay(
+            showBorder ?
+                Circle()
+                    .stroke(Color.white, lineWidth: 2)
+                : nil
+        )
+        .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 2)
+    }
+}
+
+// MARK: - Scale Button Style
+struct ScaleButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.9 : 1)
+            .animation(.spring(), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Shimmer Effect
+struct ShimmerEffect: ViewModifier {
+    @State private var phase: CGFloat = 0
+    
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                GeometryReader { geometry in
+                    LinearGradient(
+                        gradient: Gradient(stops: [
+                            .init(color: .clear, location: phase - 0.2),
+                            .init(color: .white.opacity(0.5), location: phase),
+                            .init(color: .clear, location: phase + 0.2)
+                        ]),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .mask(content)
+                    .blendMode(.screen)
+                }
+            )
+            .onAppear {
+                withAnimation(Animation.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                    phase = 1
+                }
+            }
+    }
+}
+
+struct MomentFeedView_Previews: PreviewProvider {
+    static var previews: some View {
+        MomentFeedView()
+    }
+}

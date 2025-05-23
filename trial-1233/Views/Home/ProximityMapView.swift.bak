@@ -1,0 +1,616 @@
+import SwiftUI
+import MapKit
+import CoreLocation
+
+struct ProximityMapView: View {
+    // MARK: - Properties
+    @StateObject private var viewModel = UserViewModel()
+    @ObservedObject private var locationService = LocationService.shared
+    @State private var showingLocationAlert = false
+    @State private var mapType: MKMapType = .standard
+    @State private var showSettings = false
+    @State private var showUserList = false
+    @State private var isRefreshing = false
+    @State private var showPulse = false
+    
+    // MARK: - Body
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            // Map with clusters
+            mapView
+            
+            // Error message if needed
+            errorOverlay
+            
+            // Control panel at bottom
+            controlPanel
+        }
+        .sheet(isPresented: $showSettings) {
+            MapSettingsView(mapType: $mapType)
+        }
+        .sheet(isPresented: $showUserList) {
+            NearbyUsersView(clusters: viewModel.clusters)
+        }
+        .onAppear {
+            checkLocationAndLoadClusters()
+            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                showPulse = true
+            }
+        }
+    }
+    
+    // MARK: - Map View
+    private var mapView: some View {
+        ZStack(alignment: .topTrailing) {
+            if viewModel.isLoading && viewModel.clusters.isEmpty {
+                // Loading state with shimmer effect
+                loadingView
+            } else {
+                // Map with annotations
+                Map(coordinateRegion: $viewModel.region, 
+                    showsUserLocation: true,
+                    annotationItems: viewModel.clusters) { cluster in
+                    MapAnnotation(coordinate: cluster.coordinates.coordinate) {
+                        Button(action: {
+                            showUserList = true
+                        }) {
+                            EnhancedClusterMarker(count: cluster.count, showPulse: showPulse)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+                .mapStyle(mapType == .standard ? .standard : .hybrid)
+                .ignoresSafeArea()
+                
+                // Map type selector
+                mapTypeSelector
+            }
+        }
+    }
+    
+    // MARK: - Loading View
+    private var loadingView: some View {
+        Rectangle()
+            .fill(Color.gray.opacity(0.1))
+            .edgesIgnoringSafeArea(.all)
+            .overlay(
+                VStack(spacing: 20) {
+                    Image(systemName: "map")
+                        .font(.system(size: 50))
+                        .foregroundColor(.gray)
+                    
+                    Text("Finding people nearby...")
+                        .font(.headline)
+                        .foregroundColor(.gray)
+                        .modifier(ShimmerEffect())
+                    
+                    ProgressView()
+                        .scaleEffect(1.5)
+                        .padding()
+                }
+            )
+    }
+    
+    // MARK: - Map Type Selector
+    private var mapTypeSelector: some View {
+        Menu {
+            Button(action: { mapType = .standard }) {
+                Label("Standard", systemImage: "map")
+            }
+            Button(action: { mapType = .hybrid }) {
+                Label("Hybrid", systemImage: "map.fill")
+            }
+            Button(action: { mapType = .satellite }) {
+                Label("Satellite", systemImage: "globe")
+            }
+        } label: {
+            Image(systemName: "map")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.pink)
+                .padding(12)
+                .background(
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                        .shadow(color: Color.black.opacity(0.2), radius: 5, x: 0, y: 2)
+                )
+                .padding()
+        }
+    }
+    
+    // MARK: - Error Overlay
+    private var errorOverlay: some View {
+        Group {
+            if let error = viewModel.error {
+                VStack {
+                    Spacer()
+                    Text(error)
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 15)
+                                .fill(Color.red.opacity(0.8))
+                                .shadow(color: Color.black.opacity(0.2), radius: 5, x: 0, y: 2)
+                        )
+                        .padding()
+                        .transition(.move(edge: .bottom))
+                        .animation(.spring(), value: error)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Control Panel
+    private var controlPanel: some View {
+        VStack(spacing: 0) {
+            // User stats card
+            if !viewModel.clusters.isEmpty {
+                statsCard
+            }
+            
+            // Control buttons
+            controlButtons
+        }
+    }
+    
+    // MARK: - Stats Card
+    private var statsCard: some View {
+        HStack {
+            VStack(alignment: .leading) {
+                Text("Nearby Users")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                
+                Text("\(viewModel.totalUserCount) people nearby")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.primary)
+            }
+            
+            Spacer()
+            
+            // Distance indicator
+            HStack {
+                Image(systemName: "location.circle.fill")
+                    .foregroundColor(.pink)
+                
+                Text("Within 5km")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 15)
+                .fill(.ultraThinMaterial)
+                .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 5)
+        )
+        .padding(.horizontal)
+    }
+    
+    // MARK: - Control Buttons
+    private var controlButtons: some View {
+        HStack(spacing: 20) {
+            // Refresh button
+            Button(action: {
+                withAnimation {
+                    isRefreshing = true
+                    viewModel.loadUserClusters()
+                    
+                    // Reset animation after a delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        isRefreshing = false
+                    }
+                }
+            }) {
+                VStack {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 22))
+                        .rotationEffect(Angle(degrees: isRefreshing ? 360 : 0))
+                        .animation(isRefreshing ? Animation.linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
+                    
+                    Text("Refresh")
+                        .font(.caption)
+                }
+                .foregroundColor(.white)
+                .frame(width: 70, height: 70)
+                .background(
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [.pink, .purple.opacity(0.8)]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .shadow(color: .pink.opacity(0.3), radius: 10, x: 0, y: 5)
+                )
+            }
+            
+            // Center on user button
+            Button(action: {
+                if let location = locationService.currentLocation {
+                    withAnimation(.spring()) {
+                        viewModel.centerOnUser(location: location)
+                    }
+                } else {
+                    showingLocationAlert = true
+                }
+            }) {
+                VStack {
+                    Image(systemName: "location.fill")
+                        .font(.system(size: 22))
+                    
+                    Text("Me")
+                        .font(.caption)
+                }
+                .foregroundColor(.white)
+                .frame(width: 70, height: 70)
+                .background(
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [.blue, .teal]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .shadow(color: .blue.opacity(0.3), radius: 10, x: 0, y: 5)
+                )
+            }
+            
+            // Settings button
+            Button(action: {
+                showSettings = true
+            }) {
+                VStack {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 22))
+                    
+                    Text("Settings")
+                        .font(.caption)
+                }
+                .foregroundColor(.white)
+                .frame(width: 70, height: 70)
+                .background(
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [.orange, .red.opacity(0.8)]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .shadow(color: .orange.opacity(0.3), radius: 10, x: 0, y: 5)
+                )
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 30)
+                .fill(.ultraThinMaterial)
+                .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: -5)
+        )
+        .padding()
+        .alert("Location Required", isPresented: $showingLocationAlert) {
+            Button("Settings", role: .none) {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Please enable location services to view nearby people.")
+        }
+    }
+    
+    // MARK: - Methods
+    private func checkLocationAndLoadClusters() {
+        // Request location permission if not determined
+        if locationService.authorizationStatus == .notDetermined {
+            locationService.requestLocationPermission()
+        }
+        
+        // Start updating location
+        locationService.startUpdatingLocation()
+        
+        // Check if location is available
+        if locationService.authorizationStatus == .denied || locationService.authorizationStatus == .restricted {
+            showingLocationAlert = true
+            return
+        }
+        
+        // Load clusters if location is available, otherwise wait for location update
+        if locationService.currentLocation != nil {
+            // Update user location on server
+            viewModel.updateUserLocation()
+        } else {
+            // Wait for location to be available
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                if locationService.currentLocation != nil {
+                    viewModel.updateUserLocation()
+                } else if locationService.authorizationStatus == .authorizedWhenInUse || locationService.authorizationStatus == .authorizedAlways {
+                    // Location permission granted but location not available yet
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        viewModel.updateUserLocation()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Shimmer Effect
+struct ShimmerEffect: ViewModifier {
+    @State private var phase: CGFloat = 0
+    
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                GeometryReader { geometry in
+                    LinearGradient(
+                        gradient: Gradient(stops: [
+                            .init(color: .clear, location: phase - 0.2),
+                            .init(color: .white.opacity(0.5), location: phase),
+                            .init(color: .clear, location: phase + 0.2)
+                        ]),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .mask(content)
+                    .blendMode(.screen)
+                }
+            )
+            .onAppear {
+                withAnimation(Animation.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                    phase = 1
+                }
+            }
+    }
+}
+
+// MARK: - Enhanced Cluster Marker
+struct EnhancedClusterMarker: View {
+    let count: Int
+    var showPulse: Bool = false
+    
+    var body: some View {
+        ZStack {
+            // Pulsating outer circle
+            if showPulse {
+                Circle()
+                    .fill(Color.pink.opacity(0.3))
+                    .frame(width: markerSize + 20, height: markerSize + 20)
+                    .scaleEffect(showPulse ? 1.2 : 1.0)
+            }
+            
+            // Main circle with gradient
+            Circle()
+                .fill(
+                    LinearGradient(
+                        gradient: Gradient(colors: [.pink, .purple]),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: markerSize, height: markerSize)
+                .shadow(color: .pink.opacity(0.5), radius: 5, x: 0, y: 2)
+            
+            // User count
+            Text("\(count)")
+                .font(.system(size: fontSize, weight: .bold))
+                .foregroundColor(.white)
+        }
+    }
+    
+    // Dynamic size based on count
+    private var markerSize: CGFloat {
+        let baseSize: CGFloat = 40
+        let maxSize: CGFloat = 70
+        
+        if count <= 5 {
+            return baseSize
+        } else if count <= 10 {
+            return baseSize + 8
+        } else if count <= 20 {
+            return baseSize + 15
+        } else {
+            return maxSize
+        }
+    }
+    
+    private var fontSize: CGFloat {
+        let baseSize: CGFloat = 16
+        
+        if count < 10 {
+            return baseSize
+        } else if count < 100 {
+            return baseSize - 2
+        } else {
+            return baseSize - 4
+        }
+    }
+}
+
+// MARK: - Map Settings View
+struct MapSettingsView: View {
+    @Binding var mapType: MKMapType
+    @Environment(\.presentationMode) var presentationMode
+    @State private var searchRadius: Double = 5
+    @State private var showUserCount = true
+    @State private var showDistance = true
+    
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Map Type")) {
+                    Picker("Map Type", selection: $mapType) {
+                        Text("Standard").tag(MKMapType.standard)
+                        Text("Hybrid").tag(MKMapType.hybrid)
+                        Text("Satellite").tag(MKMapType.satellite)
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                }
+                
+                Section(header: Text("Visibility")) {
+                    Toggle("Show User Count", isOn: $showUserCount)
+                    Toggle("Show Distance", isOn: $showDistance)
+                }
+                
+                Section(header: Text("Search Radius")) {
+                    VStack {
+                        Slider(value: $searchRadius, in: 1...10, step: 1)
+                        
+                        HStack {
+                            Text("1km")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            
+                            Spacer()
+                            
+                            Text("\(Int(searchRadius))km")
+                                .font(.headline)
+                                .foregroundColor(.pink)
+                            
+                            Spacer()
+                            
+                            Text("10km")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                
+                Section {
+                    Button(action: {
+                        // Apply settings and close
+                        presentationMode.wrappedValue.dismiss()
+                    }) {
+                        Text("Apply Settings")
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .foregroundColor(.white)
+                            .background(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [.pink, .purple]),
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .cornerRadius(10)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+            .navigationTitle("Map Settings")
+            .navigationBarItems(trailing: Button("Done") {
+                presentationMode.wrappedValue.dismiss()
+            })
+        }
+    }
+}
+
+// MARK: - Nearby Users View
+struct NearbyUsersView: View {
+    var clusters: [UserCluster]
+    @Environment(\.presentationMode) var presentationMode
+    
+    var totalUsers: Int {
+        clusters.reduce(0) { $0 + $1.count }
+    }
+    
+    var body: some View {
+        NavigationView {
+            VStack {
+                // Header stats
+                HStack {
+                    VStack(alignment: .leading) {
+                        Text("\(totalUsers) Users Nearby")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                        
+                        Text("Within 5km radius")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        presentationMode.wrappedValue.dismiss()
+                    }) {
+                        Text("Close")
+                            .fontWeight(.medium)
+                            .foregroundColor(.pink)
+                    }
+                }
+                .padding()
+                
+                // Cluster list
+                List {
+                    ForEach(clusters) { cluster in
+                        HStack {
+                            // User count indicator
+                            ZStack {
+                                Circle()
+                                    .fill(
+                                        LinearGradient(
+                                            gradient: Gradient(colors: [.pink, .purple]),
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .frame(width: 40, height: 40)
+                                
+                                Text("\(cluster.count)")
+                                    .foregroundColor(.white)
+                                    .font(.system(size: 14, weight: .bold))
+                            }
+                            
+                            VStack(alignment: .leading) {
+                                Text("Cluster #\(cluster.id.prefix(6))")
+                                    .font(.headline)
+                                
+                                Text("Around \(String(format: "%.1f", calculateDistance(for: cluster)))km away")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Spacer()
+                            
+                            Button(action: {}) {
+                                Text("View")
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(Color.pink)
+                                    .cornerRadius(20)
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                }
+            }
+            .navigationTitle("Nearby Users")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarHidden(true)
+        }
+    }
+    
+    // Calculate distance between user and cluster
+    private func calculateDistance(for cluster: UserCluster) -> Double {
+        guard let userLocation = LocationService.shared.currentLocation else { return 0 }
+        
+        let userCLLocation = CLLocation(latitude: userLocation.coordinate.latitude, longitude: userLocation.coordinate.longitude)
+        let clusterCLLocation = CLLocation(latitude: cluster.coordinates.coordinate.latitude, longitude: cluster.coordinates.coordinate.longitude)
+        
+        return userCLLocation.distance(from: clusterCLLocation) / 1000 // Convert to km
+    }
+}
+
+// MARK: - Preview
+struct ProximityMapView_Previews: PreviewProvider {
+    static var previews: some View {
+        ProximityMapView()
+    }
+}
